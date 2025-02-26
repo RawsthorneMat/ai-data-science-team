@@ -14,6 +14,7 @@ from langchain_core.messages import BaseMessage
 
 from langgraph.types import Command
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Checkpointer
 
 import os
 import json 
@@ -85,6 +86,8 @@ class DataVisualizationAgent(BaseAgent):
         If True, skips the default recommended visualization steps. Defaults to False.
     bypass_explain_code : bool, optional
         If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : langgraph.types.Checkpointer
+        A checkpointer to use for saving and loading the agent
 
     Methods
     -------
@@ -161,7 +164,8 @@ class DataVisualizationAgent(BaseAgent):
         overwrite=True, 
         human_in_the_loop=False, 
         bypass_recommended_steps=False, 
-        bypass_explain_code=False
+        bypass_explain_code=False,
+        checkpointer=None,
     ):
         self._params = {
             "model": model,
@@ -174,6 +178,7 @@ class DataVisualizationAgent(BaseAgent):
             "human_in_the_loop": human_in_the_loop,
             "bypass_recommended_steps": bypass_recommended_steps,
             "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer,
         }
         self._compiled_graph = self._make_compiled_graph()
         self.response = None
@@ -385,7 +390,8 @@ def make_data_visualization_agent(
     overwrite=True, 
     human_in_the_loop=False, 
     bypass_recommended_steps=False, 
-    bypass_explain_code=False
+    bypass_explain_code=False,
+    checkpointer=None,
 ):
     """
     Creates a data visualization agent that can generate Plotly charts based on user-defined instructions or
@@ -423,6 +429,8 @@ def make_data_visualization_agent(
         If True, skips the default recommended visualization steps. Defaults to False.
     bypass_explain_code : bool, optional
         If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : langgraph.types.Checkpointer
+        A checkpointer to use for saving and loading the agent
 
     Examples
     --------
@@ -454,6 +462,11 @@ def make_data_visualization_agent(
     """
     
     llm = model
+    
+    if human_in_the_loop:
+        if checkpointer is None:
+            print("Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver().")
+            checkpointer = MemorySaver()
     
     # Human in th loop requires recommended steps
     if bypass_recommended_steps and human_in_the_loop:
@@ -501,12 +514,22 @@ def make_data_visualization_agent(
             Previously Recommended Instructions (if any):
             {recommended_steps}
             
-            DATA: 
+            DATA SUMMARY: 
             {all_datasets_summary}
             
-            Formulate chart generator instructions by informing the chart generator of what type of plotly plot to use (e.g. bar, line, scatter, etc) to best represent the data. 
+            IMPORTANT:
             
-            Come up with an informative title from the user's question and data provided. Also provide X and Y axis titles.
+            - Formulate chart generator instructions by informing the chart generator of what type of plotly plot to use (e.g. bar, line, scatter, etc) to best represent the data. 
+            - Think about how best to convey the information in the data to the user.
+            - If the user does not specify a type of plot, select the appropriate chart type based on the data summary provided and the user's question and how best to show the results.
+            - Come up with an informative title from the user's question and data provided. Also provide X and Y axis titles.
+            
+            CHART TYPE SELECTION TIPS:
+            
+            - If a numeric column has less than 10 unique values, consider this column to be treated as a categorical column. Pick a chart that is appropriate for categorical data.
+            - If a numeric column has more than 10 unique values, consider this column to be treated as a continuous column. Pick a chart that is appropriate for continuous data.       
+            
+            PLOT THEME:
             
             Instruct the chart generator to use the following theme colors, sizes, etc:
             
@@ -520,6 +543,8 @@ def make_data_visualization_agent(
             - Add smoothers or trendlines to scatter plots unless not desired by the user
             - Do not use color_discrete_map (this will result in an error)
             - Hover tip size: 8.8
+            
+            RETURN FORMAT:
             
             Return your instructions in the following format:
             CHART GENERATOR INSTRUCTIONS: 
@@ -751,9 +776,10 @@ def make_data_visualization_agent(
         error_key="data_visualization_error",
         human_in_the_loop=human_in_the_loop,  # or False
         human_review_node_name="human_review",
-        checkpointer=MemorySaver() if human_in_the_loop else None,
+        checkpointer=checkpointer,
         bypass_recommended_steps=bypass_recommended_steps,
         bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
     )
         
     return app

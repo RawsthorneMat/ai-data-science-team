@@ -13,7 +13,7 @@ from IPython.display import Markdown
 
 from langchain.prompts import PromptTemplate
 from langchain_core.messages import BaseMessage
-from langgraph.types import Command
+from langgraph.types import Command, Checkpointer
 from langgraph.checkpoint.memory import MemorySaver
 
 from ai_data_science_team.templates import(
@@ -83,6 +83,8 @@ class DataWranglingAgent(BaseAgent):
         If True, skips the step that generates recommended data wrangling steps. Defaults to False.
     bypass_explain_code : bool, optional
         If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : Checkpointer, optional
+        A checkpointer object to save and load the agent's state. Defaults to None.
 
     Methods
     -------
@@ -180,7 +182,8 @@ class DataWranglingAgent(BaseAgent):
         overwrite=True,
         human_in_the_loop=False,
         bypass_recommended_steps=False,
-        bypass_explain_code=False
+        bypass_explain_code=False,
+        checkpointer=None,
     ):
         self._params = {
             "model": model,
@@ -192,7 +195,8 @@ class DataWranglingAgent(BaseAgent):
             "overwrite": overwrite,
             "human_in_the_loop": human_in_the_loop,
             "bypass_recommended_steps": bypass_recommended_steps,
-            "bypass_explain_code": bypass_explain_code
+            "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer,
         }
         self._compiled_graph = self._make_compiled_graph()
         self.response = None
@@ -443,7 +447,8 @@ def make_data_wrangling_agent(
     overwrite=True, 
     human_in_the_loop=False, 
     bypass_recommended_steps=False, 
-    bypass_explain_code=False
+    bypass_explain_code=False,
+    checkpointer=None,
 ):
     """
     Creates a data wrangling agent that can be run on one or more datasets. The agent can be
@@ -488,6 +493,8 @@ def make_data_wrangling_agent(
         Bypass the recommendation step, by default False
     bypass_explain_code : bool, optional
         Bypass the code explanation step, by default False.
+    checkpointer : Checkpointer, optional
+        A checkpointer object to save and load the agent's state. Defaults to None.
 
     Example
     -------
@@ -519,6 +526,11 @@ def make_data_wrangling_agent(
         The data wrangling agent as a state graph.
     """
     llm = model
+    
+    if human_in_the_loop:
+        if checkpointer is None:
+            print("Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver().")
+            checkpointer = MemorySaver()
     
     # Human in th loop requires recommended steps
     if bypass_recommended_steps and human_in_the_loop:
@@ -569,7 +581,7 @@ def make_data_wrangling_agent(
 
         # Create a summary for all datasets
         # We'll include a short sample and info for each dataset
-        all_datasets_summary = get_dataframe_summary(dataframes, n_sample=n_samples)
+        all_datasets_summary = get_dataframe_summary(dataframes, n_sample=n_samples, skip_stats=True)
 
         # Join all datasets summaries into one big text block
         all_datasets_summary_str = "\n\n".join(all_datasets_summary)
@@ -642,7 +654,7 @@ def make_data_wrangling_agent(
 
             # Create a summary for all datasets
             # We'll include a short sample and info for each dataset
-            all_datasets_summary = get_dataframe_summary(dataframes, n_sample=n_samples)
+            all_datasets_summary = get_dataframe_summary(dataframes, n_sample=n_samples, skip_stats=True)
 
             # Join all datasets summaries into one big text block
             all_datasets_summary_str = "\n\n".join(all_datasets_summary)
@@ -654,9 +666,12 @@ def make_data_wrangling_agent(
         
         data_wrangling_prompt = PromptTemplate(
             template="""
-            You are a Data Wrangling Coding Agent. Your job is to create a {function_name}() function that can be run on the provided data. 
+            You are a Pandas Data Wrangling Coding Agent. Your job is to create a {function_name}() function that can be run on the provided data. You should use Pandas and NumPy for data wrangling operations.
             
-            Follow these recommended steps:
+            User instructions:
+            {user_instructions}
+            
+            Follow these recommended steps (if present):
             {recommended_steps}
             
             If multiple datasets are provided, you may need to merge or join them. Make sure to handle that scenario based on the recommended steps and user instructions.
@@ -685,17 +700,22 @@ def make_data_wrangling_agent(
             1. If the incoming data is not a list. Convert it to a list first. 
             2. Do not specify data types inside the function arguments.
             
+            Important Notes:
+            1. Do Not use Print statements to display the data. Return the data frame instead with the data wrangling operation performed.
+            2. Do not plot graphs. Only return the data frame.
+            
             Make sure to explain any non-trivial steps with inline comments. Follow user instructions. Comment code thoroughly.
             
             
             """,
-            input_variables=["recommended_steps", "all_datasets_summary", "function_name"]
+            input_variables=["recommended_steps", "user_instructions", "all_datasets_summary", "function_name"]
         )
 
         data_wrangling_agent = data_wrangling_prompt | llm | PythonOutputParser()
 
         response = data_wrangling_agent.invoke({
             "recommended_steps": state.get("recommended_steps"),
+            "user_instructions": state.get("user_instructions"),
             "all_datasets_summary": all_datasets_summary_str,
             "function_name": function_name
         })
@@ -835,9 +855,10 @@ def make_data_wrangling_agent(
         error_key="data_wrangler_error",
         human_in_the_loop=human_in_the_loop,
         human_review_node_name="human_review",
-        checkpointer=MemorySaver() if human_in_the_loop else None,
+        checkpointer=checkpointer,
         bypass_recommended_steps=bypass_recommended_steps,
         bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
     )
         
     return app
